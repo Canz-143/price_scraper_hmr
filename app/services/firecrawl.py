@@ -9,7 +9,7 @@ from crawl4ai.extraction_strategy import LLMExtractionStrategy
 from pydantic import BaseModel, Field
 from app.config import GOOGLE_API_KEY
 
-nest_asyncio.apply()
+#nest_asyncio.apply()
 
 class ProductPrice(BaseModel):
     combined_price: str = Field(..., description="The product price as a single string, including the currency symbol (e.g., $2000).")
@@ -219,7 +219,7 @@ async def call_crawl4ai_extractor(links, request_id=None):
 
     extraction_strategy = LLMExtractionStrategy(
         llm_config=LLMConfig(
-            provider="gemini/gemini-2.5-pro",
+            provider="gemini/gemini-2.5-flash",
             api_token=api_token
         ),
         schema=ProductPrice.model_json_schema(),
