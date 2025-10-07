@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+pillow
+python-dotenv
+google-generativeai
+requests
+google-genai
+python-multipart
+crawl4ai
+nest_asyncio
+playwright
