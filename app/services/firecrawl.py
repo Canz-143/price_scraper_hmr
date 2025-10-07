@@ -106,7 +106,7 @@ async def call_crawl4ai_extractor(links, request_id=None):
     
     async with AsyncWebCrawler(verbose=True) as crawler:
         # Step 1: LLM-based Schema Generation (one-time cost)
-        llm_config = LLMConfig(provider="gemini/gemini-1.5-flash", api_token=api_token)
+        llm_config = LLMConfig(provider="gemini/gemini-2.5-flash", api_token=api_token)
         one_time_llm_strategy = LLMExtractionStrategy(
             llm_config=llm_config,
             schema=ProductPrice.model_json_schema(),
