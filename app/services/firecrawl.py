@@ -1,16 +1,18 @@
 import os
 import json
 import asyncio
+import nest_asyncio
 import re
 from urllib.parse import urlparse, parse_qs
-from typing import List, Dict, Any
 
 from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, LLMConfig, CacheMode
-from crawl4ai.extraction_strategy import LLMExtractionStrategy, JsonCssExtractionStrategy
-from crawl4ai import MemoryAdaptiveDispatcher, RateLimiter
+from crawl4ai.extraction_strategy import LLMExtractionStrategy
 from pydantic import BaseModel, Field
 
 from app.config import GOOGLE_API_KEY
+
+
+# nest_asyncio.apply()
 
 
 class ProductPrice(BaseModel):
@@ -37,14 +39,28 @@ class ProductPrice(BaseModel):
 
 
 def is_valid_url(url):
-    """Check if URL is valid and has proper format."""
-    if not url or not url.startswith(('http://', 'https://')):
+    """
+    Check if URL is valid and has proper format for Firecrawl.
+    
+    Returns:
+        bool: True if valid, False if should be filtered out.
+    """
+    if not url:
+        return False
+    
+    # Must start with http:// or https://
+    if not url.startswith(('http://', 'https://')):
         return False
     
     try:
         parsed = urlparse(url)
-        if not parsed.netloc or '.' not in parsed.netloc:
+        # Must have a valid domain
+        if not parsed.netloc:
             return False
+        # Must have a proper TLD (at least one dot in domain)
+        if '.' not in parsed.netloc:
+            return False
+        # Filter out blocked/tracking URLs
         if '/blocked?' in url or 'blocked' in parsed.path:
             return False
         return True
@@ -53,7 +69,12 @@ def is_valid_url(url):
 
 
 def is_search_or_collection_page(url):
-    """Determine if a URL is a search result page or collection page."""
+    """
+    Determine if a URL is a search result page or collection page.
+    
+    Returns:
+        bool: True if it should be filtered out, False if it's a product page.
+    """
     if not url:
         return True
     
@@ -61,55 +82,103 @@ def is_search_or_collection_page(url):
     path = parsed_url.path
     query_params = parse_qs(parsed_url.query)
     
+    # Search page indicators
     search_indicators = [
-        r'/search', r'/results', r'/find', r'/query', r'/s/',
-        r'/buscar', r'/recherche', r'/suche',
+        # URL path patterns
+        r'/search',
+        r'/results',
+        r'/find',
+        r'/query',
+        r'/s/',
+        r'/buscar',      # Spanish
+        r'/recherche',   # French
+        r'/suche',       # German
     ]
     
+    # Collection/category page indicators
     collection_indicators = [
-        r'/category', r'/categories', r'/collection', r'/collections',
-        r'/browse', r'/catalog', r'/products(?:/(?:all|list))?$',
-        r'/items', r'/list', r'/archive', r'/tag/', r'/tags/',
-        r'/c/', r'/cat/', r'/department', r'/shop(?:/(?:all|category))?$',
+        r'/category',
+        r'/categories',
+        r'/collection',
+        r'/collections',
+        r'/browse',
+        r'/catalog',
+        r'/products(?:/(?:all|list))?$',  # /products, /products/all, /products/list
+        r'/items',
+        r'/list',
+        r'/archive',
+        r'/tag/',
+        r'/tags/',
+        r'/c/',
+        r'/cat/',
+        r'/department',
+        r'/shop(?:/(?:all|category))?$',  # /shop, /shop/all, /shop/category
     ]
     
-    for pattern in search_indicators + collection_indicators:
+    # Check URL path for search patterns
+    for pattern in search_indicators:
         if re.search(pattern, path):
             return True
     
-    search_params = ['q', 'query', 'search', 'keyword', 'term', 'find', 's', 'k', 'p']
-    if any(param in query_params for param in search_params):
-        return True
+    # Check URL path for collection patterns
+    for pattern in collection_indicators:
+        if re.search(pattern, path):
+            return True
     
+    # Check query parameters for search indicators
+    search_params = ['q', 'query', 'search', 'keyword', 'term', 'find', 's', 'k', 'p']
+    for param in search_params:
+        if param in query_params:
+            return True
+    
+    # Check query parameters for collection/filtering indicators
     collection_params = ['category', 'cat', 'collection', 'tag', 'filter', 'sort']
     collection_param_count = sum(1 for param in collection_params if param in query_params)
     
+    # If multiple collection parameters are present, it's likely a collection page
     if collection_param_count >= 2:
         return True
     
+    # Check for pagination parameters combined with other indicators
     pagination_params = ['page', 'p', 'offset', 'start', 'limit']
     has_pagination = any(param in query_params for param in pagination_params)
     
     if has_pagination and collection_param_count >= 1:
         return True
     
+    # Domain-specific patterns
     domain = parsed_url.netloc
     
+    # Amazon-specific patterns
     if 'amazon.' in domain:
-        if '/s?' in url or '/s/' in path or re.search(r'/b/|/gp/browse/|/departments/', path):
+        # Amazon search results
+        if '/s?' in url or '/s/' in path:
             return True
+        # Amazon category pages
+        if re.search(r'/b/|/gp/browse/|/departments/', path):
+            return True
+    
+    # eBay-specific patterns
     elif 'ebay.' in domain:
         if '/sch/' in path or '/b/' in path:
             return True
+    
+    # Shopify stores
     elif 'shopify' in domain or '/collections/' in path:
         if '/collections/' in path and not re.search(r'/collections/[^/]+/products/', path):
             return True
+    
+    # Etsy-specific patterns
     elif 'etsy.' in domain:
         if '/search/' in path or '/c/' in path:
             return True
+    
+    # Walmart-specific patterns
     elif 'walmart.' in domain:
         if '/search/' in path or '/browse/' in path:
             return True
+    
+    # Target-specific patterns
     elif 'target.' in domain:
         if '/s/' in path or '/c/' in path:
             return True
@@ -118,125 +187,69 @@ def is_search_or_collection_page(url):
 
 
 def is_likely_product_page(url):
-    """Additional check to identify likely product pages."""
+    """
+    Additional check to identify likely product pages.
+    
+    Returns:
+        bool: True if it looks like a product page.
+    """
     if not url:
         return False
     
     parsed_url = urlparse(url.lower())
     path = parsed_url.path
     
+    # Product page indicators
     product_indicators = [
-        r'/product/', r'/item/', r'/p/', r'/dp/',
-        r'/itm/', r'/listing/', r'/products/[^/]+$',
-        r'/[^/]+-p-\d+', r'/\d+\.html?$',
+        r'/product/',
+        r'/item/',
+        r'/p/',
+        r'/dp/',                  # Amazon
+        r'/itm/',                 # eBay
+        r'/listing/',             # Etsy
+        r'/products/[^/]+$',      # Shopify pattern
+        r'/[^/]+-p-\d+',          # Common product ID patterns
+        r'/\d+\.html?$',          # Numeric product IDs
     ]
     
     for pattern in product_indicators:
         if re.search(pattern, path):
             return True
     
+    # Check if path ends with what looks like a product identifier
     path_parts = [part for part in path.split('/') if part]
     if path_parts:
         last_part = path_parts[-1]
+        # Product pages often end with product names or IDs
         if re.search(r'^[a-zA-Z0-9\-_]+$', last_part) and len(last_part) > 3:
             return True
     
     return False
 
 
-def filter_urls(links: List[str], max_urls: int = 10) -> List[str]:
-    """Filter and validate URLs in a single pass."""
-    filtered = []
-    for url in links[:max_urls]:
-        if (is_valid_url(url) and 
-            not is_search_or_collection_page(url) and 
-            is_likely_product_page(url)):
-            filtered.append(url)
-    return filtered
-
-
-# OPTIMIZATION 1: Try non-LLM extraction first (1000x faster)
-async def try_fast_extraction(urls: List[str], crawler: AsyncWebCrawler) -> Dict[str, Any]:
+async def call_crawl4ai_extractor(links, request_id=None):
     """
-    Attempt fast CSS-based extraction first before falling back to LLM.
-    This is 1000x faster and free compared to LLM extraction.
+    Extract product information from URLs using Crawl4AI and Gemini.
+    
+    Args:
+        links (list): List of URLs to crawl.
+        request_id: Optional request identifier for logging.
+    
+    Returns:
+        dict or list: Extracted product data or error information.
     """
-    # Common CSS selectors for price extraction across major e-commerce sites
-    price_schema = {
-        "name": "ProductPrice",
-        "baseSelector": "body",
-        "fields": [
-            {
-                "name": "combined_price",
-                "selector": """
-                    [class*='price']:not([class*='strike']):not([class*='was']),
-                    [id*='price'],
-                    [data-price],
-                    .a-price .a-offscreen,
-                    span[class*='Price'],
-                    meta[property='og:price:amount']
-                """,
-                "type": "text",
-                "default": ""
-            },
-            {
-                "name": "currency_code",
-                "selector": "meta[property='og:price:currency']",
-                "type": "attribute",
-                "attribute": "content",
-                "default": "USD"
-            }
-        ]
-    }
+    # Filter links
+    limited_links = links[:5]
+    filtered_links = []
     
-    fast_strategy = JsonCssExtractionStrategy(price_schema)
-    fast_config = CrawlerRunConfig(
-        cache_mode=CacheMode.ENABLED,  # Use cache for repeated URLs
-        extraction_strategy=fast_strategy,
-        word_count_threshold=10,
-        page_timeout=15000,  # Faster timeout
-        wait_for="css:body",  # Don't wait unnecessarily
-    )
-    
-    results = {}
-    
-    # arun_many returns a list, not an async iterator
-    crawl_results = await crawler.arun_many(urls, config=fast_config)
-    
-    for result in crawl_results:
-        if result.success and result.extracted_content:
-            try:
-                data = json.loads(result.extracted_content)
-                # Check if we got meaningful data
-                if data and isinstance(data, list) and len(data) > 0:
-                    if data[0].get('combined_price'):
-                        results[result.url] = {
-                            'method': 'fast',
-                            'data': data[0],
-                            'success': True
-                        }
-                        continue
-            except:
-                pass
-        
-        # Mark for LLM fallback
-        results[result.url] = {'method': 'needs_llm', 'success': False}
-    
-    return results
-
-
-# OPTIMIZATION 2: Batch LLM processing with concurrent execution
-async def call_crawl4ai_extractor(links: List[str], request_id=None) -> List[Dict[str, Any]]:
-    """
-    Optimized extraction with multiple strategies:
-    1. Fast CSS extraction (try first)
-    2. LLM extraction (fallback for failed URLs)
-    3. Memory-adaptive concurrency
-    4. Concurrent processing for better throughput
-    """
-    
-    # Filter URLs efficiently
-    filtered_links = filter_urls(links, max_urls=10)
+    for url in limited_links:
+        if not is_valid_url(url):
+            continue
+        if is_search_or_collection_page(url):
+            continue
+        if not is_likely_product_page(url):
+            continue
+        filtered_links.append(url)
     
     if not filtered_links:
         return {
@@ -244,113 +257,57 @@ async def call_crawl4ai_extractor(links: List[str], request_id=None) -> List[Dic
             "error": "No valid product URLs after filtering."
         }
     
-    # OPTIMIZATION 3: Configure memory-adaptive dispatcher for better resource management
-    dispatcher = MemoryAdaptiveDispatcher(
-        memory_threshold_percent=75.0,  # Adjust based on your server
-        max_session_permit=8,  # Concurrent crawls (tune based on your server)
-        check_interval=0.5,
-        rate_limiter=RateLimiter(
-            base_delay=(0.1, 0.3),  # Faster delays for better throughput
-            max_delay=10.0,
-            max_retries=2  # Fewer retries for speed
+    # Set Google API key for Gemini
+    os.environ['GEMINI_API_KEY'] = GOOGLE_API_KEY
+    api_token = os.getenv('GEMINI_API_KEY')
+    
+    extraction_strategy = LLMExtractionStrategy(
+        llm_config=LLMConfig(
+            provider="gemini/gemini-2.5-flash",
+            api_token=api_token
+        ),
+        schema=ProductPrice.model_json_schema(),
+        extraction_type="schema",
+        instruction=(
+            "Extract the main product price as a combined string, the price, "
+            "the currency code, the website name, and the direct product page URL."
         )
     )
     
-    output = []
+    config = CrawlerRunConfig(
+        cache_mode=CacheMode.BYPASS,
+        extraction_strategy=extraction_strategy,
+    )
     
-    async with AsyncWebCrawler(verbose=False) as crawler:  # Disable verbose for speed
-        # Step 1: Try fast extraction first
-        fast_results = await try_fast_extraction(filtered_links, crawler)
-        
-        # Collect URLs that need LLM
-        llm_needed_urls = [
-            url for url, result in fast_results.items() 
-            if result.get('method') == 'needs_llm'
-        ]
-        
-        # Add successful fast extractions to output
-        for url, result in fast_results.items():
-            if result.get('success'):
-                parsed = urlparse(url)
-                website_name = parsed.netloc.replace('www.', '')
-                
+    async with AsyncWebCrawler(verbose=True) as crawler:
+        results = await crawler.arun_many(urls=filtered_links, config=config)
+    
+    output = []
+    for result in results:
+        if result.success:
+            try:
+                extracted_data = json.loads(result.extracted_content)
                 output.append({
-                    "url": url,
-                    "data": {
-                        "combined_price": result['data'].get('combined_price', ''),
-                        "price": re.sub(r'[^\d.]', '', result['data'].get('combined_price', '')),
-                        "currency_code": result['data'].get('currency_code', 'USD'),
-                        "website_name": website_name,
-                        "product_page_url": url
-                    },
-                    "success": True,
-                    "method": "fast_css"
+                    "url": result.url,
+                    "data": extracted_data,
+                    "success": True
                 })
-        
-        # Step 2: Use LLM only for URLs that failed fast extraction
-        if llm_needed_urls:
-            os.environ['GEMINI_API_KEY'] = GOOGLE_API_KEY
-            
-            # OPTIMIZATION 4: Use cheaper, faster LLM model
-            extraction_strategy = LLMExtractionStrategy(
-                llm_config=LLMConfig(
-                    provider="gemini/gemini-2.5-flash",  # Already using fast model ✓
-                    api_token=os.getenv('GEMINI_API_KEY'),
-                    temperature=0.0,  # Deterministic for consistency
-                    max_tokens=500  # Limit tokens for faster responses
-                ),
-                schema=ProductPrice.model_json_schema(),
-                extraction_type="schema",
-                instruction=(
-                    "Extract ONLY: price with currency symbol, numeric price, "
-                    "currency code (USD/EUR/etc), website name, and product URL. "
-                    "Be concise."
-                ),
-                input_format="fit_markdown",  # Use cleaned content for speed
-                apply_chunking=False,  # No chunking for product pages
-            )
-            
-            llm_config = CrawlerRunConfig(
-                cache_mode=CacheMode.ENABLED,  # Cache LLM results
-                extraction_strategy=extraction_strategy,
-                word_count_threshold=20,
-                page_timeout=20000,
-                excluded_tags=['nav', 'footer', 'header', 'aside'],  # Skip irrelevant content
-            )
-            
-            # OPTIMIZATION 5: Concurrent processing with dispatcher
-            llm_results = await crawler.arun_many(
-                urls=llm_needed_urls,
-                config=llm_config,
-                dispatcher=dispatcher
-            )
-            
-            for result in llm_results:
-                if result.success:
-                    try:
-                        extracted_data = json.loads(result.extracted_content)
-                        output.append({
-                            "url": result.url,
-                            "data": extracted_data,
-                            "success": True,
-                            "method": "llm"
-                        })
-                    except json.JSONDecodeError:
-                        output.append({
-                            "url": result.url,
-                            "error": "Error decoding JSON",
-                            "content": result.extracted_content,
-                            "success": False
-                        })
-                else:
-                    output.append({
-                        "url": result.url,
-                        "error": result.error_message,
-                        "success": False
-                    })
+            except json.JSONDecodeError:
+                output.append({
+                    "url": result.url,
+                    "error": "Error decoding JSON",
+                    "content": result.extracted_content,
+                    "success": False
+                })
+        else:
+            output.append({
+                "url": result.url,
+                "error": result.error_message,
+                "success": False
+            })
     
     return output
 
 
-# For compatibility
+# For compatibility, alias the function name
 call_firecrawl_extractor = call_crawl4ai_extractor
