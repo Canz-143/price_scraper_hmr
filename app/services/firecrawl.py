@@ -7,7 +7,7 @@ from typing import List, Dict, Any
 
 from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, LLMConfig, CacheMode
 from crawl4ai.extraction_strategy import LLMExtractionStrategy, JsonCssExtractionStrategy
-from crawl4ai import MemoryAdaptiveDispatcher, RateLimiter, CrawlerMonitor, DisplayMode
+from crawl4ai import MemoryAdaptiveDispatcher, RateLimiter
 from pydantic import BaseModel, Field
 
 from app.config import GOOGLE_API_KEY
@@ -147,7 +147,7 @@ def is_likely_product_page(url):
 def filter_urls(links: List[str], max_urls: int = 10) -> List[str]:
     """Filter and validate URLs in a single pass."""
     filtered = []
-    for url in links[:max_urls]:  # Increased from 5 to 10 for better throughput
+    for url in links[:max_urls]:
         if (is_valid_url(url) and 
             not is_search_or_collection_page(url) and 
             is_likely_product_page(url)):
@@ -199,7 +199,11 @@ async def try_fast_extraction(urls: List[str], crawler: AsyncWebCrawler) -> Dict
     )
     
     results = {}
-    async for result in await crawler.arun_many(urls, config=fast_config, stream=True):
+    
+    # arun_many returns a list, not an async iterator
+    crawl_results = await crawler.arun_many(urls, config=fast_config)
+    
+    for result in crawl_results:
         if result.success and result.extracted_content:
             try:
                 data = json.loads(result.extracted_content)
@@ -221,14 +225,14 @@ async def try_fast_extraction(urls: List[str], crawler: AsyncWebCrawler) -> Dict
     return results
 
 
-# OPTIMIZATION 2: Batch LLM processing with streaming
+# OPTIMIZATION 2: Batch LLM processing with concurrent execution
 async def call_crawl4ai_extractor(links: List[str], request_id=None) -> List[Dict[str, Any]]:
     """
     Optimized extraction with multiple strategies:
     1. Fast CSS extraction (try first)
     2. LLM extraction (fallback for failed URLs)
     3. Memory-adaptive concurrency
-    4. Streaming results for faster API responses
+    4. Concurrent processing for better throughput
     """
     
     # Filter URLs efficiently
@@ -314,13 +318,14 @@ async def call_crawl4ai_extractor(links: List[str], request_id=None) -> List[Dic
                 excluded_tags=['nav', 'footer', 'header', 'aside'],  # Skip irrelevant content
             )
             
-            # OPTIMIZATION 5: Stream results for faster API responses
-            async for result in await crawler.arun_many(
+            # OPTIMIZATION 5: Concurrent processing with dispatcher
+            llm_results = await crawler.arun_many(
                 urls=llm_needed_urls,
                 config=llm_config,
-                dispatcher=dispatcher,
-                stream=True  # Get results as soon as they're ready
-            ):
+                dispatcher=dispatcher
+            )
+            
+            for result in llm_results:
                 if result.success:
                     try:
                         extracted_data = json.loads(result.extracted_content)
