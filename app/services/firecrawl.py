@@ -236,7 +236,7 @@ async def call_crawl4ai_extractor(links, request_id=None):
         request_id: Optional request identifier for logging.
     
     Returns:
-        dict: Response with 'success' status and 'data' containing all results.
+        dict: Response with 'success' status and 'data' containing ecommerce_links array.
     """
     # Filter links
     limited_links = links[:5]
@@ -255,7 +255,9 @@ async def call_crawl4ai_extractor(links, request_id=None):
         return {
             "success": False,
             "error": "No valid product URLs after filtering.",
-            "data": []
+            "data": {
+                "ecommerce_links": []
+            }
         }
     
     # Set Google API key for Gemini
@@ -283,33 +285,31 @@ async def call_crawl4ai_extractor(links, request_id=None):
     async with AsyncWebCrawler(verbose=True) as crawler:
         results = await crawler.arun_many(urls=filtered_links, config=config)
     
-    output = []
+    ecommerce_links = []
     for result in results:
         if result.success:
             try:
                 extracted_data = json.loads(result.extracted_content)
-                output.append({
-                    "url": result.url,
-                    "product_info": extracted_data,
-                    "success": True
+                # Transform to match the required format
+                ecommerce_links.append({
+                    "website_url": result.url,
+                    "price_string": extracted_data.get("price", ""),
+                    "website_name": extracted_data.get("website_name", ""),
+                    "currency_code": extracted_data.get("currency_code", ""),
+                    "price_combined": extracted_data.get("combined_price", "")
                 })
             except json.JSONDecodeError:
-                output.append({
-                    "url": result.url,
-                    "error": "Error decoding JSON",
-                    "content": result.extracted_content,
-                    "success": False
-                })
+                # Skip failed extractions or optionally add with empty values
+                pass
         else:
-            output.append({
-                "url": result.url,
-                "error": result.error_message,
-                "success": False
-            })
+            # Skip failed crawls or optionally add with empty values
+            pass
     
     return {
         "success": True,
-        "data": output
+        "data": {
+            "ecommerce_links": ecommerce_links
+        }
     }
 
 
