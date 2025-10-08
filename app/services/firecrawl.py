@@ -239,7 +239,7 @@ async def call_crawl4ai_extractor(links, request_id=None):
         dict or list: Extracted product data or error information.
     """
     # Filter links
-    limited_links = links[:3]
+    limited_links = links[:5]
     filtered_links = []
     
     for url in limited_links:
