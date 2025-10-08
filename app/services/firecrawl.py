@@ -175,7 +175,6 @@ async def call_crawl4ai_extractor(links, request_id=None):
     - Faster Gemini model (2.0-flash-exp)
     - Semaphore control for concurrency management
     - Word count threshold to skip empty pages
-    - HTML input format for better product page parsing
     
     Args:
         links (list): URLs to crawl
@@ -228,15 +227,10 @@ async def call_crawl4ai_extractor(links, request_id=None):
             "5. product_page_url - the direct URL to this specific product's page. "
             "Focus on the primary/featured product only. Do not extract multiple products."
         ),
-        chunk_token_threshold=2000,
-        overlap_rate=0.0,
-        apply_chunking=True,
-        input_format="html",  # OPTION C: Use HTML format for better product page parsing
         extra_args={
             "temperature": 0,      # Deterministic output
-            "max_tokens": 2000      # Limit for faster response
-        },
-        verbose=True  # Added for debugging
+            "max_tokens": 1000      # Limit for faster response
+        }
     )
     
     # OPTIMIZATION 2: Browser config for speed (70% faster initialization)
