@@ -210,22 +210,18 @@ async def call_crawl4ai_extractor(links, request_id=None):
     # OPTIMIZATION 1: Use faster Gemini model with optimized settings
     extraction_strategy = LLMExtractionStrategy(
         llm_config=LLMConfig(
-            provider="gemini/gemini-2.5-flash",  # Faster than 2.5-flash
+            provider="gemini/gemini-2.0-flash",  # Faster than 2.5-flash
             api_token=api_token
         ),
         schema=ProductPrice.model_json_schema(),
         extraction_type="schema",
         instruction=(
-            "Extract product information from this page. "
-            "If this is a direct product page with a single main product, extract that product's details. "
-            "If this is a search results page, collections page, or listing page with multiple products, extract only the FIRST product shown. "
-            "Extract the following fields: "
-            "1. combined_price - the full price string with currency symbol (e.g., '$2000', 'PHP 2,500') "
-            "2. price - only the numeric price value without currency symbol (e.g., '2000', '2500') "
-            "3. currency_code - the 3-letter currency code (e.g., 'USD', 'PHP', 'EUR') "
-            "4. website_name - the name of the e-commerce website "
-            "5. product_page_url - the direct URL to this specific product's page. "
-            "Focus on the primary/featured product only. Do not extract multiple products."
+            "Extract the main product's pricing details from this page: "
+            "combined_price (e.g., '$2000' or 'PHP 2,500'), "
+            "price (numeric only, e.g., '2000'), "
+            "currency_code (3-letter code like USD, PHP, EUR), "
+            "website_name, and product_page_url. "
+            "If multiple products exist, extract only the FIRST/PRIMARY product shown."
         ),
         extra_args={
             "temperature": 0,      # Deterministic output
