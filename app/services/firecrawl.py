@@ -184,7 +184,7 @@ async def call_crawl4ai_extractor(links, request_id=None):
         dict: Response with success status and ecommerce_links array
     """
     # Filter and limit links
-    limited_links = links[:5]
+    limited_links = links[:10]
     filtered_links = []
     
     for url in limited_links:
