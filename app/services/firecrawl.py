@@ -236,7 +236,7 @@ async def call_crawl4ai_extractor(links, request_id=None):
         request_id: Optional request identifier for logging.
     
     Returns:
-        dict or list: Extracted product data or error information.
+        dict: Response with 'success' status and 'data' containing all results.
     """
     # Filter links
     limited_links = links[:5]
@@ -254,7 +254,8 @@ async def call_crawl4ai_extractor(links, request_id=None):
     if not filtered_links:
         return {
             "success": False,
-            "error": "No valid product URLs after filtering."
+            "error": "No valid product URLs after filtering.",
+            "data": []
         }
     
     # Set Google API key for Gemini
@@ -289,7 +290,7 @@ async def call_crawl4ai_extractor(links, request_id=None):
                 extracted_data = json.loads(result.extracted_content)
                 output.append({
                     "url": result.url,
-                    "data": extracted_data,
+                    "product_info": extracted_data,
                     "success": True
                 })
             except json.JSONDecodeError:
@@ -306,7 +307,10 @@ async def call_crawl4ai_extractor(links, request_id=None):
                 "success": False
             })
     
-    return output
+    return {
+        "success": True,
+        "data": output
+    }
 
 
 # For compatibility, alias the function name
