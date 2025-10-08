@@ -210,7 +210,7 @@ async def call_crawl4ai_extractor(links, request_id=None):
     # OPTIMIZATION 1: Use faster Gemini model with optimized settings
     extraction_strategy = LLMExtractionStrategy(
         llm_config=LLMConfig(
-            provider="gemini/gemini-2.0-flash-exp",  # Faster than 2.5-flash
+            provider="gemini/gemini-2.0-flash",  # Faster than 2.5-flash
             api_token=api_token
         ),
         schema=ProductPrice.model_json_schema(),
