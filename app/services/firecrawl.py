@@ -290,14 +290,25 @@ async def call_crawl4ai_extractor(links, request_id=None):
         if result.success:
             try:
                 extracted_data = json.loads(result.extracted_content)
-                # Transform to match the required format
-                ecommerce_links.append({
-                    "website_url": result.url,
-                    "price_string": extracted_data.get("price", ""),
-                    "website_name": extracted_data.get("website_name", ""),
-                    "currency_code": extracted_data.get("currency_code", ""),
-                    "price_combined": extracted_data.get("combined_price", "")
-                })
+                
+                # Handle both list and dict responses
+                if isinstance(extracted_data, list):
+                    # If it's a list, take the first item
+                    if extracted_data:
+                        extracted_data = extracted_data[0]
+                    else:
+                        continue
+                
+                # Ensure it's a dict before calling .get()
+                if isinstance(extracted_data, dict):
+                    # Transform to match the required format
+                    ecommerce_links.append({
+                        "website_url": result.url,
+                        "price_string": extracted_data.get("price", ""),
+                        "website_name": extracted_data.get("website_name", ""),
+                        "currency_code": extracted_data.get("currency_code", ""),
+                        "price_combined": extracted_data.get("combined_price", "")
+                    })
             except json.JSONDecodeError:
                 # Skip failed extractions or optionally add with empty values
                 pass
