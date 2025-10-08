@@ -216,7 +216,12 @@ async def call_crawl4ai_extractor(links, request_id=None):
         schema=ProductPrice.model_json_schema(),
         extraction_type="schema",
         instruction=(
-            "Extract the product price as a combined string, the price, the currency code, the website name, and the direct product page URL."
+            "Extract the main product's pricing details from this page: "
+            "combined_price (e.g., '$2000' or 'PHP 2,500'), "
+            "price (numeric only, e.g., '2000'), "
+            "currency_code (3-letter code like USD, PHP, EUR), "
+            "website_name, and product_page_url. "
+            "If multiple products exist, extract only the FIRST/PRIMARY product shown."
         ),
         extra_args={
             "temperature": 0,      # Deterministic output
