@@ -303,7 +303,7 @@ async def call_crawl4ai_extractor(links, request_id=None):
                 if isinstance(extracted_data, dict):
                     # Transform to match the required format
                     ecommerce_links.append({
-                        "website_url": result.url,
+                        "website_url": extracted_data.get("product_page_url", result.url),
                         "price_string": extracted_data.get("price", ""),
                         "website_name": extracted_data.get("website_name", ""),
                         "currency_code": extracted_data.get("currency_code", ""),
