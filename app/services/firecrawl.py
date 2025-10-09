@@ -444,7 +444,7 @@ async def call_crawl4ai_extractor(links, request_id=None):
     # Enhanced LLM extraction with clearer price examples
     extraction_strategy = LLMExtractionStrategy(
         llm_config=LLMConfig(
-            provider="gemini/gemini-2.5-flash",
+            provider="gemini/gemini-2.0-flash",
             api_token=api_token
         ),
         schema=ProductPrice.model_json_schema(),
