@@ -249,7 +249,7 @@ async def call_crawl4ai_extractor(links, request_id=None):
         ),
         extra_args={
             "temperature": 0,      # Deterministic output
-            "max_tokens": 5000      # Limit for faster response
+            "max_tokens": 15000      # Limit for faster response
         }
     )
     
@@ -264,7 +264,7 @@ async def call_crawl4ai_extractor(links, request_id=None):
     run_config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=extraction_strategy,
-        wait_until="networkidle",  # 40% faster than networkidle
+        wait_until="commit",  # 40% faster than networkidle
         page_timeout=30000,              # 30s timeout
         word_count_threshold=10,         # Skip pages with little content
         stream=True,                     # Process as results arrive
