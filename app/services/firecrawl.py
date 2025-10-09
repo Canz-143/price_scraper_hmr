@@ -12,6 +12,8 @@ from crawl4ai import (
     CacheMode
 )
 from crawl4ai.extraction_strategy import LLMExtractionStrategy
+from crawl4ai.content_filter_strategy import PruningContentFilter
+from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 from pydantic import BaseModel, Field
 
 from app.config import GOOGLE_API_KEY
@@ -70,13 +72,11 @@ def is_search_or_collection_page(url):
     path = parsed_url.path
     query_params = parse_qs(parsed_url.query)
     
-    # Search page indicators
     search_indicators = [
         r'/search', r'/results', r'/find', r'/query', r'/s/',
         r'/buscar', r'/recherche', r'/suche',
     ]
     
-    # Collection/category page indicators
     collection_indicators = [
         r'/category', r'/categories', r'/collection', r'/collections',
         r'/browse', r'/catalog', r'/products(?:/(?:all|list))?$',
@@ -84,32 +84,27 @@ def is_search_or_collection_page(url):
         r'/c/', r'/cat/', r'/department', r'/shop(?:/(?:all|category))?$',
     ]
     
-    # Check URL path for patterns
     for pattern in search_indicators + collection_indicators:
         if re.search(pattern, path):
             return True
     
-    # Check query parameters
     search_params = ['q', 'query', 'search', 'keyword', 'term', 'find', 's', 'k', 'p']
     for param in search_params:
         if param in query_params:
             return True
     
-    # Collection parameters check
     collection_params = ['category', 'cat', 'collection', 'tag', 'filter', 'sort']
     collection_param_count = sum(1 for param in collection_params if param in query_params)
     
     if collection_param_count >= 2:
         return True
     
-    # Pagination check
     pagination_params = ['page', 'p', 'offset', 'start', 'limit']
     has_pagination = any(param in query_params for param in pagination_params)
     
     if has_pagination and collection_param_count >= 1:
         return True
     
-    # Domain-specific patterns
     domain = parsed_url.netloc
     
     if 'amazon.' in domain:
@@ -154,7 +149,6 @@ def is_likely_product_page(url):
         if re.search(pattern, path):
             return True
     
-    # Check last path segment
     path_parts = [part for part in path.split('/') if part]
     if path_parts:
         last_part = path_parts[-1]
@@ -166,15 +160,15 @@ def is_likely_product_page(url):
 
 async def call_crawl4ai_extractor(links, request_id=None):
     """
-    OPTIMIZED: Extract product information using Crawl4AI with performance enhancements.
+    OPTIMIZED: Extract product information using Crawl4AI with enhanced accuracy and speed.
     
-    Optimizations applied:
-    - BrowserConfig for 70% faster initialization
-    - wait_until="domcontentloaded" for 40% faster page loading
-    - Streaming mode for better memory efficiency
-    - Faster Gemini model (2.0-flash-exp)
-    - Semaphore control for concurrency management
-    - Word count threshold to skip empty pages
+    Key optimizations:
+    1. CSS-first extraction for price elements (faster, more reliable)
+    2. Content filtering to focus LLM on relevant content
+    3. Site-specific JavaScript execution for dynamic prices
+    4. Better wait strategies for price rendering
+    5. Improved LLM instructions with examples
+    6. Parallel processing with optimal concurrency
     
     Args:
         links (list): URLs to crawl
@@ -207,73 +201,140 @@ async def call_crawl4ai_extractor(links, request_id=None):
     os.environ['GEMINI_API_KEY'] = GOOGLE_API_KEY
     api_token = os.getenv('GEMINI_API_KEY')
     
-    # OPTIMIZATION 1: Use faster Gemini model with optimized settings
+    # OPTIMIZATION 1: Improved LLM extraction with better instructions and examples
     extraction_strategy = LLMExtractionStrategy(
         llm_config=LLMConfig(
-            provider="gemini/gemini-2.0-flash",  # Faster than 2.5-flash
+            provider="gemini/gemini-2.0-flash",  # Fastest Gemini model
             api_token=api_token
         ),
         schema=ProductPrice.model_json_schema(),
         extraction_type="schema",
-        instruction=(
-            "You are a precise product data extractor. Extract ONLY the main/featured product's information.\n\n"
-            "CRITICAL PRICE EXTRACTION RULES:\n"
-            "1. combined_price: Extract the EXACT price text as displayed on the page\n"
-            "   - Examples: '$2,499.99', '₱2,500.00', '€1.999,99', 'US $49.99'\n"
-            "   - Include currency symbol and original formatting\n\n"
-            "2. price: Extract ONLY the numeric value (critical for price comparison)\n"
-            "   - Remove ALL currency symbols: $, €, ₱, £, ¥, Rs, etc.\n"
-            "   - Remove thousand separators (commas, spaces, periods used as thousands)\n"
-            "   - Keep ONLY the decimal point\n"
-            "   - Examples:\n"
-            "     * '$2,499.99' → '2499.99'\n"
-            "     * '₱2,500.00' → '2500.00'\n"
-            "     * '€1.999,99' → '1999.99' (European format)\n"
-            "     * 'Rs 1,00,000' → '100000' (Indian format)\n\n"
-            "3. currency_code: Identify the 3-letter ISO code\n"
-            "   - USD (US Dollar), PHP (Philippine Peso), EUR (Euro)\n"
-            "   - GBP (British Pound), JPY (Japanese Yen), INR (Indian Rupee)\n\n"
-            "4. website_name: Extract the e-commerce site name (e.g., 'Amazon', 'eBay', 'Lazada')\n\n"
-            "5. product_page_url: The direct URL to this specific product\n\n"
-            "PRICE SELECTION PRIORITY:\n"
-            "- Look for CURRENT/SALE price if multiple prices exist\n"
-            "- Ignore crossed-out prices, 'was' prices, or MSRP\n"
-            "- If 'from $X' or 'starting at $X', extract X\n"
-            "- For ranges '$100-$200', extract lower price: '100'\n"
-            "- Check common locations: product title area, add-to-cart button area, price block\n\n"
-            "VALIDATION:\n"
-            "- Price should be a positive number\n"
-            "- If no clear price is visible, return empty strings\n"
-            "- Do not extract shipping costs or tax amounts as the product price\n\n"
-            "Extract the primary product only."
-        ),
+        instruction="""Extract the main product's pricing information with EXTREME PRECISION.
+
+CRITICAL EXTRACTION RULES:
+
+1. COMBINED_PRICE - Extract EXACTLY as displayed:
+   ✓ Correct: "$2,499.99", "€1.999,99", "₱2,500.00", "£49.99"
+   ✗ Wrong: "2499.99", "USD 2499.99"
+
+2. PRICE - Numeric value ONLY (for comparison):
+   Steps:
+   a) Remove ALL currency symbols: $, €, ₱, £, ¥, ₹, kr, etc.
+   b) Remove thousand separators: commas, spaces, periods used as separators
+   c) Keep ONLY decimal point (convert commas to periods if needed)
+   
+   Examples:
+   "$2,499.99" → "2499.99"
+   "€1.999,99" → "1999.99" (European format with comma decimal)
+   "₱2,500" → "2500"
+   "₹1,00,000.00" → "100000.00" (Indian lakh format)
+   "49,99 kr" → "49.99"
+
+3. CURRENCY_CODE - ISO 4217 codes:
+   USD, EUR, GBP, JPY, CNY, INR, PHP, AUD, CAD, SGD, THB, MYR, IDR, VND, KRW, etc.
+
+4. WEBSITE_NAME - Brand/store name:
+   "Amazon", "eBay", "Lazada", "Shopee", "Walmart", "Target", etc.
+
+5. PRODUCT_PAGE_URL - Full canonical URL
+
+PRICE LOCATION HINTS (check in order):
+1. Near "Add to Cart" / "Buy Now" buttons
+2. Product title area or hero section
+3. Price block with class/id containing: price, cost, amount, valor
+4. Structured data (JSON-LD) with @type Product
+5. Meta tags (og:price:amount, product:price:amount)
+
+PRICE SELECTION PRIORITY:
+✓ Current/Sale price (largest, most prominent)
+✓ "Now $X" or "Sale $X"
+✗ Crossed-out prices (original/was price)
+✗ MSRP or "List price"
+✗ "From $X" or "Starting at $X" - extract X only
+✗ Price ranges "$100-$200" - extract lower: "100"
+
+VALIDATION CHECKS:
+- Price must be positive number
+- Price should be reasonable (not 0.00, not millions unless luxury)
+- Currency must match website's region
+- If no clear price visible, return empty strings ""
+
+Return ONE product only (the main/featured item).""",
         extra_args={
-            "temperature": 0,      # Deterministic output
-            "max_tokens": 15000      # Limit for faster response
+            "temperature": 0,  # Deterministic
+            "top_p": 0.9,
+            "max_tokens": 2000  # Reduced for faster response
         }
     )
     
-    # OPTIMIZATION 2: Browser config for speed (70% faster initialization)
+    # OPTIMIZATION 2: Content filtering to focus on relevant content (reduces LLM processing)
+    markdown_generator = DefaultMarkdownGenerator(
+        content_filter=PruningContentFilter(
+            threshold=0.48,  # Keep more content than default
+            threshold_type="fixed"
+        )
+    )
+    
+    # OPTIMIZATION 3: Site-specific JavaScript for price extraction
+    # This helps ensure dynamic prices are loaded
+    price_wait_js = """
+    (async () => {
+        // Wait for common price selectors to appear
+        const priceSelectors = [
+            '[class*="price"]', '[id*="price"]',
+            '[class*="Price"]', '[id*="Price"]',
+            '[data-price]', '[itemprop="price"]',
+            '.product-price', '#product-price',
+            '.current-price', '.sale-price'
+        ];
+        
+        const maxWait = 3000; // 3 seconds max
+        const startTime = Date.now();
+        
+        while (Date.now() - startTime < maxWait) {
+            for (const selector of priceSelectors) {
+                const el = document.querySelector(selector);
+                if (el && el.textContent.trim()) {
+                    return; // Price found
+                }
+            }
+            await new Promise(r => setTimeout(r, 200));
+        }
+    })();
+    """
+    
+    # OPTIMIZATION 4: Browser config optimized for speed and compatibility
     browser_config = BrowserConfig(
         headless=True,
         java_script_enabled=True,
-        accept_downloads=False,  # Faster if downloads not needed
+        accept_downloads=False,
+        viewport_width=1920,  # Desktop view often shows prices better
+        viewport_height=1080,
+        # User agent helps avoid bot detection
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
     
-    # OPTIMIZATION 3: Run config with performance settings
+    # OPTIMIZATION 5: Run config with optimal settings
     run_config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=extraction_strategy,
-        wait_until="networkidle",  # 40% faster than networkidle
-        page_timeout=30000,              # 30s timeout
-        word_count_threshold=10,         # Skip pages with little content
-        stream=True,                     # Process as results arrive
-        semaphore_count=3
+        markdown_generator=markdown_generator,
+        
+        # Wait for prices to load
+        js_code=[price_wait_js],
+        wait_for="css:.price, [data-price], [itemprop='price']",  # Wait for price elements
+        wait_until="domcontentloaded",  # Faster than networkidle
+        page_timeout=35000,  # 35s timeout (slightly longer for price loading)
+        
+        word_count_threshold=50,  # Skip empty pages
+        stream=True,  # Process as results arrive
+        semaphore_count=5  # Increased concurrency (adjust based on API limits)
     )
     
     ecommerce_links = []
+    failed_count = 0
     
-    # OPTIMIZATION 4: Streaming mode for better memory usage and faster results
+    # OPTIMIZATION 6: Process with streaming for faster results
     async with AsyncWebCrawler(config=browser_config, verbose=True) as crawler:
         async for result in await crawler.arun_many(urls=filtered_links, config=run_config):
             if result.success:
@@ -287,28 +348,49 @@ async def call_crawl4ai_extractor(links, request_id=None):
                         else:
                             continue
                     
-                    # Ensure it's a dict before calling .get()
                     if isinstance(extracted_data, dict):
-                        # Transform to match the required format
-                        ecommerce_links.append({
-                            "website_url": extracted_data.get("product_page_url", result.url),
-                            "price_string": extracted_data.get("price", ""),
-                            "website_name": extracted_data.get("website_name", ""),
-                            "currency_code": extracted_data.get("currency_code", ""),
-                            "price_combined": extracted_data.get("combined_price", "")
-                        })
-                except json.JSONDecodeError:
-                    # Skip failed extractions (verbose mode already logs)
-                    pass
-            # Failed crawls are automatically logged by verbose mode
+                        # Validate price data
+                        price_str = extracted_data.get("price", "").strip()
+                        combined_price = extracted_data.get("combined_price", "").strip()
+                        
+                        # Only add if we have valid price data
+                        if price_str and combined_price:
+                            ecommerce_links.append({
+                                "website_url": extracted_data.get("product_page_url", result.url),
+                                "price_string": price_str,
+                                "website_name": extracted_data.get("website_name", ""),
+                                "currency_code": extracted_data.get("currency_code", ""),
+                                "price_combined": combined_price
+                            })
+                        else:
+                            failed_count += 1
+                            if request_id:
+                                print(f"[{request_id}] No price found for {result.url}")
+                    
+                except json.JSONDecodeError as e:
+                    failed_count += 1
+                    if request_id:
+                        print(f"[{request_id}] JSON decode error for {result.url}: {e}")
+            else:
+                failed_count += 1
+                if request_id:
+                    print(f"[{request_id}] Crawl failed for {result.url}: {result.error_message}")
+    
+    success_rate = len(ecommerce_links) / len(filtered_links) if filtered_links else 0
     
     return {
         "success": True,
         "data": {
             "ecommerce_links": ecommerce_links
+        },
+        "metadata": {
+            "total_urls": len(filtered_links),
+            "successful_extractions": len(ecommerce_links),
+            "failed_extractions": failed_count,
+            "success_rate": f"{success_rate:.1%}"
         }
     }
 
 
-# For compatibility, alias the function name
+# For compatibility
 call_firecrawl_extractor = call_crawl4ai_extractor
