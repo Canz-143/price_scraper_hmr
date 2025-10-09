@@ -484,18 +484,13 @@ async def call_crawl4ai_extractor(links, request_id=None):
             
             "💰 PRICE SELECTION RULES:\n"
             "✓ Choose the CURRENT/ACTIVE price (usually near 'Add to Cart' button)\n"
-            "✓ If there's a SALE price, use that (not the crossed-out original)\n"
             "✓ For 'from $X' or 'starting at $X', extract X\n"
             "✓ For price ranges '$100-$200', extract the LOWER price: '100'\n\n"
             
             "✗ IGNORE these:\n"
-            "- Crossed-out prices\n"
-            "- 'Was' or 'Originally' prices\n"
-            "- MSRP or List Price\n"
             "- Shipping costs\n"
             "- Tax amounts\n"
             "- Monthly payment plans\n"
-            "- Price per unit (unless that IS the main price)\n\n"
             
             "⚠️ If no clear price is visible, return empty strings for all fields.\n"
             "⚠️ Don't extract shipping/tax as the product price.\n"
