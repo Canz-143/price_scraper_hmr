@@ -315,9 +315,7 @@ Return ONE product only (the main/featured item).""",
     
     # OPTIMIZATION 4: Site-specific JavaScript for price extraction
     # This helps ensure dynamic prices are loaded
-    price_wait_js = """
-    (async () => {
-        // Wait for common price selectors to appear
+    price_wait_js = """(async () => {
         const priceSelectors = [
             '[class*="price"]', '[id*="price"]',
             '[class*="Price"]', '[id*="Price"]',
@@ -325,21 +323,18 @@ Return ONE product only (the main/featured item).""",
             '.product-price', '#product-price',
             '.current-price', '.sale-price'
         ];
-        
-        const maxWait = 3000; // 3 seconds max
+        const maxWait = 3000;
         const startTime = Date.now();
-        
         while (Date.now() - startTime < maxWait) {
             for (const selector of priceSelectors) {
                 const el = document.querySelector(selector);
                 if (el && el.textContent.trim()) {
-                    return; // Price found
+                    return;
                 }
             }
             await new Promise(r => setTimeout(r, 200));
         }
-    })();
-    """
+    })();"""
     
     # OPTIMIZATION 5: Browser config optimized for speed and compatibility
     browser_config = BrowserConfig(
