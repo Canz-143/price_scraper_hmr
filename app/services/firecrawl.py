@@ -511,11 +511,12 @@ async def call_crawl4ai_extractor(links, request_id=None):
     run_config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=extraction_strategy,
-        wait_until="domcontentloaded",
+        wait_until="load",
         page_timeout=30000,
         word_count_threshold=10,
         stream=True,
-        semaphore_count=3
+        semaphore_count=3,
+        delay_before_return_html=2.0
     )
     
     ecommerce_links = []
