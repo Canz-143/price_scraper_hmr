@@ -11,7 +11,7 @@ from crawl4ai import (
     LLMConfig, 
     CacheMode
 )
-from crawl4ai.extraction_strategy import LLMExtractionStrategy
+from crawl4ai.extraction_strategy import LLMExtractionStrategy, JsonCssExtractionStrategy
 from crawl4ai.content_filter_strategy import PruningContentFilter
 from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 from pydantic import BaseModel, Field
@@ -162,12 +162,14 @@ async def call_crawl4ai_extractor(links, request_id=None):
     """
     OPTIMIZED: Extract product information using Crawl4AI with enhanced accuracy and speed.
     
+    Strategy: CSS-first extraction with LLM fallback for maximum speed and accuracy
+    
     Key optimizations:
-    1. CSS-first extraction for price elements (faster, more reliable)
-    2. Content filtering to focus LLM on relevant content
-    3. Site-specific JavaScript execution for dynamic prices
-    4. Better wait strategies for price rendering
-    5. Improved LLM instructions with examples
+    1. CSS extraction first (10x faster, no API cost) - tries common price patterns
+    2. LLM fallback only if CSS fails - for complex/dynamic layouts
+    3. Content filtering to focus LLM on relevant content
+    4. Site-specific JavaScript execution for dynamic prices
+    5. Better wait strategies for price rendering
     6. Parallel processing with optimal concurrency
     
     Args:
@@ -201,10 +203,72 @@ async def call_crawl4ai_extractor(links, request_id=None):
     os.environ['GEMINI_API_KEY'] = GOOGLE_API_KEY
     api_token = os.getenv('GEMINI_API_KEY')
     
-    # OPTIMIZATION 1: Improved LLM extraction with better instructions and examples
-    extraction_strategy = LLMExtractionStrategy(
+    # OPTIMIZATION 1: CSS-based extraction schema (fast, no API cost)
+    # Covers most common e-commerce price patterns
+    css_schema = {
+        "name": "Product Price Data",
+        "baseSelector": "body",
+        "fields": [
+            # Price - try multiple common selectors
+            {
+                "name": "price_raw",
+                "selector": """
+                    [itemprop='price'],
+                    [data-price],
+                    [class*='price' i]:not([class*='original' i]):not([class*='was' i]):not([class*='strike' i]),
+                    [id*='price' i],
+                    .sale-price,
+                    .current-price,
+                    .product-price,
+                    #product-price,
+                    .price-now,
+                    meta[property='og:price:amount']
+                """,
+                "type": "text",
+                "attribute": "content"  # For meta tags
+            },
+            # Currency code
+            {
+                "name": "currency_code",
+                "selector": """
+                    [itemprop='priceCurrency'],
+                    [data-currency],
+                    meta[property='og:price:currency']
+                """,
+                "type": "text",
+                "attribute": "content"
+            },
+            # Product name/title
+            {
+                "name": "product_name",
+                "selector": """
+                    [itemprop='name'],
+                    h1.product-title,
+                    h1[class*='product' i],
+                    .product-name,
+                    #product-name
+                """,
+                "type": "text"
+            },
+            # Website/brand name
+            {
+                "name": "website_name",
+                "selector": """
+                    [itemprop='brand'],
+                    meta[property='og:site_name'],
+                    .site-logo img,
+                    header img[alt]
+                """,
+                "type": "text",
+                "attribute": "alt"
+            }
+        ]
+    }
+    
+    # OPTIMIZATION 2: LLM extraction as fallback (only if CSS fails)
+    llm_extraction_strategy = LLMExtractionStrategy(
         llm_config=LLMConfig(
-            provider="gemini/gemini-2.0-flash",  # Fastest Gemini model
+            provider="gemini/gemini-2.0-flash-exp",  # Fastest Gemini model
             api_token=api_token
         ),
         schema=ProductPrice.model_json_schema(),
@@ -267,7 +331,7 @@ Return ONE product only (the main/featured item).""",
         }
     )
     
-    # OPTIMIZATION 2: Content filtering to focus on relevant content (reduces LLM processing)
+    # OPTIMIZATION 3: Content filtering to focus on relevant content (reduces LLM processing)
     markdown_generator = DefaultMarkdownGenerator(
         content_filter=PruningContentFilter(
             threshold=0.48,  # Keep more content than default
@@ -275,7 +339,7 @@ Return ONE product only (the main/featured item).""",
         )
     )
     
-    # OPTIMIZATION 3: Site-specific JavaScript for price extraction
+    # OPTIMIZATION 4: Site-specific JavaScript for price extraction
     # This helps ensure dynamic prices are loaded
     price_wait_js = """
     (async () => {
@@ -303,7 +367,7 @@ Return ONE product only (the main/featured item).""",
     })();
     """
     
-    # OPTIMIZATION 4: Browser config optimized for speed and compatibility
+    # OPTIMIZATION 5: Browser config optimized for speed and compatibility
     browser_config = BrowserConfig(
         headless=True,
         java_script_enabled=True,
@@ -314,7 +378,52 @@ Return ONE product only (the main/featured item).""",
         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
     
-    # OPTIMIZATION 5: Run config with optimal settings
+    # Helper function to parse price from CSS extraction
+    def parse_css_price(css_data, url):
+        """Parse and validate price data from CSS extraction."""
+        try:
+            if not css_data or not isinstance(css_data, dict):
+                return None
+            
+            price_raw = css_data.get('price_raw', '').strip()
+            if not price_raw:
+                return None
+            
+            # Extract numeric price
+            # Remove currency symbols and format
+            price_clean = re.sub(r'[^\d.,]', '', price_raw)
+            
+            # Handle different decimal separators
+            # European format: 1.999,99 -> 1999.99
+            if ',' in price_clean and '.' in price_clean:
+                if price_clean.rindex(',') > price_clean.rindex('.'):
+                    # Comma is decimal separator
+                    price_clean = price_clean.replace('.', '').replace(',', '.')
+                else:
+                    # Period is decimal separator
+                    price_clean = price_clean.replace(',', '')
+            elif ',' in price_clean:
+                # Check if comma is decimal separator (less than 3 digits after)
+                parts = price_clean.split(',')
+                if len(parts[-1]) <= 2:
+                    price_clean = price_clean.replace(',', '.')
+                else:
+                    price_clean = price_clean.replace(',', '')
+            
+            # Validate numeric
+            try:
+                price_float = float(price_clean)
+                if price_float <= 0 or price_float > 1000000000:  # Sanity check
+                    return None
+            except ValueError:
+                return None
+            
+            # Determine currency from various sources
+            currency = css_data.get('currency_code', '').strip().upper()
+            if not currency:
+                # Try to extract from price string
+                currency_symbols = {
+                    '
     run_config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=extraction_strategy,
@@ -388,6 +497,255 @@ Return ONE product only (the main/featured item).""",
             "successful_extractions": len(ecommerce_links),
             "failed_extractions": failed_count,
             "success_rate": f"{success_rate:.1%}"
+        }
+    }
+
+
+# For compatibility
+call_firecrawl_extractor = call_crawl4ai_extractor: 'USD', '€': 'EUR', '£': 'GBP', '¥': 'JPY',
+                    '₹': 'INR', '₱': 'PHP', 'R
+    run_config = CrawlerRunConfig(
+        cache_mode=CacheMode.BYPASS,
+        extraction_strategy=extraction_strategy,
+        markdown_generator=markdown_generator,
+        
+        # Wait for prices to load
+        js_code=[price_wait_js],
+        wait_for="css:.price, [data-price], [itemprop='price']",  # Wait for price elements
+        wait_until="domcontentloaded",  # Faster than networkidle
+        page_timeout=35000,  # 35s timeout (slightly longer for price loading)
+        
+        word_count_threshold=50,  # Skip empty pages
+        stream=True,  # Process as results arrive
+        semaphore_count=5  # Increased concurrency (adjust based on API limits)
+    )
+    
+    ecommerce_links = []
+    failed_count = 0
+    
+    # OPTIMIZATION 6: Process with streaming for faster results
+    async with AsyncWebCrawler(config=browser_config, verbose=True) as crawler:
+        async for result in await crawler.arun_many(urls=filtered_links, config=run_config):
+            if result.success:
+                try:
+                    extracted_data = json.loads(result.extracted_content)
+                    
+                    # Handle both list and dict responses
+                    if isinstance(extracted_data, list):
+                        if extracted_data:
+                            extracted_data = extracted_data[0]
+                        else:
+                            continue
+                    
+                    if isinstance(extracted_data, dict):
+                        # Validate price data
+                        price_str = extracted_data.get("price", "").strip()
+                        combined_price = extracted_data.get("combined_price", "").strip()
+                        
+                        # Only add if we have valid price data
+                        if price_str and combined_price:
+                            ecommerce_links.append({
+                                "website_url": extracted_data.get("product_page_url", result.url),
+                                "price_string": price_str,
+                                "website_name": extracted_data.get("website_name", ""),
+                                "currency_code": extracted_data.get("currency_code", ""),
+                                "price_combined": combined_price
+                            })
+                        else:
+                            failed_count += 1
+                            if request_id:
+                                print(f"[{request_id}] No price found for {result.url}")
+                    
+                except json.JSONDecodeError as e:
+                    failed_count += 1
+                    if request_id:
+                        print(f"[{request_id}] JSON decode error for {result.url}: {e}")
+            else:
+                failed_count += 1
+                if request_id:
+                    print(f"[{request_id}] Crawl failed for {result.url}: {result.error_message}")
+    
+    success_rate = len(ecommerce_links) / len(filtered_links) if filtered_links else 0
+    
+    return {
+        "success": True,
+        "data": {
+            "ecommerce_links": ecommerce_links
+        },
+        "metadata": {
+            "total_urls": len(filtered_links),
+            "successful_extractions": len(ecommerce_links),
+            "failed_extractions": failed_count,
+            "success_rate": f"{success_rate:.1%}"
+        }
+    }
+
+
+# For compatibility
+call_firecrawl_extractor = call_crawl4ai_extractor: 'BRL', 'kr': 'SEK',
+                    'zł': 'PLN', '₪': 'ILS', '₩': 'KRW', '฿': 'THB',
+                    'RM': 'MYR', 'Rp': 'IDR', '₫': 'VND'
+                }
+                for symbol, code in currency_symbols.items():
+                    if symbol in price_raw:
+                        currency = code
+                        break
+            
+            # Get website name from domain or meta
+            website_name = css_data.get('website_name', '')
+            if not website_name:
+                domain = urlparse(url).netloc
+                website_name = domain.split('.')[0].title()
+            
+            return {
+                "website_url": url,
+                "price_string": price_clean,
+                "website_name": website_name,
+                "currency_code": currency or 'USD',  # Default to USD
+                "price_combined": price_raw
+            }
+            
+        except Exception as e:
+            if request_id:
+                print(f"[{request_id}] CSS price parsing error: {e}")
+            return None
+    
+    # OPTIMIZATION 6: Run config - Try CSS first
+    css_run_config = CrawlerRunConfig(
+        cache_mode=CacheMode.BYPASS,
+        extraction_strategy=JsonCssExtractionStrategy(css_schema),
+        
+        # Wait for prices to load
+        js_code=[price_wait_js],
+        wait_for="css:[class*='price' i], [data-price], [itemprop='price']",
+        wait_until="domcontentloaded",
+        page_timeout=35000,
+        
+        word_count_threshold=50,
+        stream=True,
+        semaphore_count=5
+    )
+    
+    # OPTIMIZATION 7: LLM fallback config (only for failed CSS extractions)
+    llm_run_config = CrawlerRunConfig(
+        cache_mode=CacheMode.BYPASS,
+        extraction_strategy=llm_extraction_strategy,
+        markdown_generator=markdown_generator,
+        
+        js_code=[price_wait_js],
+        wait_for="css:[class*='price' i], [data-price], [itemprop='price']",
+        wait_until="domcontentloaded",
+        page_timeout=35000,
+        
+        word_count_threshold=50,
+        stream=False,  # No streaming for fallback
+        semaphore_count=3  # Lower concurrency for LLM
+    )
+    
+    ecommerce_links = []
+    failed_css_urls = []
+    css_success = 0
+    llm_success = 0
+    failed_count = 0
+    
+    # PHASE 1: Try CSS extraction first (fast, no cost)
+    if request_id:
+        print(f"[{request_id}] Phase 1: Attempting CSS extraction for {len(filtered_links)} URLs...")
+    
+    async with AsyncWebCrawler(config=browser_config, verbose=True) as crawler:
+        async for result in await crawler.arun_many(urls=filtered_links, config=css_run_config):
+            if result.success:
+                try:
+                    css_data = json.loads(result.extracted_content)
+                    
+                    # Handle list response
+                    if isinstance(css_data, list):
+                        css_data = css_data[0] if css_data else {}
+                    
+                    # Try to parse CSS extraction
+                    parsed_result = parse_css_price(css_data, result.url)
+                    
+                    if parsed_result and parsed_result.get('price_string'):
+                        ecommerce_links.append(parsed_result)
+                        css_success += 1
+                        if request_id:
+                            print(f"[{request_id}] ✓ CSS extracted: {result.url}")
+                    else:
+                        # CSS failed, mark for LLM fallback
+                        failed_css_urls.append(result.url)
+                        if request_id:
+                            print(f"[{request_id}] ⚠ CSS failed, queuing for LLM: {result.url}")
+                
+                except (json.JSONDecodeError, Exception) as e:
+                    failed_css_urls.append(result.url)
+                    if request_id:
+                        print(f"[{request_id}] ⚠ CSS error, queuing for LLM: {result.url}")
+            else:
+                failed_count += 1
+                if request_id:
+                    print(f"[{request_id}] ✗ Crawl failed: {result.url}")
+    
+    # PHASE 2: LLM fallback for failed CSS extractions
+    if failed_css_urls:
+        if request_id:
+            print(f"[{request_id}] Phase 2: LLM fallback for {len(failed_css_urls)} URLs...")
+        
+        async with AsyncWebCrawler(config=browser_config, verbose=True) as crawler:
+            results = await crawler.arun_many(urls=failed_css_urls, config=llm_run_config)
+            
+            for result in results:
+                if result.success:
+                    try:
+                        extracted_data = json.loads(result.extracted_content)
+                        
+                        if isinstance(extracted_data, list):
+                            extracted_data = extracted_data[0] if extracted_data else {}
+                        
+                        if isinstance(extracted_data, dict):
+                            price_str = extracted_data.get("price", "").strip()
+                            combined_price = extracted_data.get("combined_price", "").strip()
+                            
+                            if price_str and combined_price:
+                                ecommerce_links.append({
+                                    "website_url": extracted_data.get("product_page_url", result.url),
+                                    "price_string": price_str,
+                                    "website_name": extracted_data.get("website_name", ""),
+                                    "currency_code": extracted_data.get("currency_code", ""),
+                                    "price_combined": combined_price
+                                })
+                                llm_success += 1
+                                if request_id:
+                                    print(f"[{request_id}] ✓ LLM extracted: {result.url}")
+                            else:
+                                failed_count += 1
+                                if request_id:
+                                    print(f"[{request_id}] ✗ LLM no price: {result.url}")
+                    
+                    except (json.JSONDecodeError, Exception) as e:
+                        failed_count += 1
+                        if request_id:
+                            print(f"[{request_id}] ✗ LLM error: {result.url}")
+                else:
+                    failed_count += 1
+    
+    total_success = css_success + llm_success
+    success_rate = total_success / len(filtered_links) if filtered_links else 0
+    
+    if request_id:
+        print(f"[{request_id}] Results: {css_success} CSS, {llm_success} LLM, {failed_count} failed")
+    
+    return {
+        "success": True,
+        "data": {
+            "ecommerce_links": ecommerce_links
+        },
+        "metadata": {
+            "total_urls": len(filtered_links),
+            "css_extractions": css_success,
+            "llm_extractions": llm_success,
+            "failed_extractions": failed_count,
+            "success_rate": f"{success_rate:.1%}",
+            "cost_savings": f"{css_success}/{total_success} extractions were free (CSS)"
         }
     }
 
