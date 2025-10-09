@@ -249,7 +249,7 @@ async def call_crawl4ai_extractor(links, request_id=None):
         ),
         extra_args={
             "temperature": 0,      # Deterministic output
-            "max_tokens": 15000      # Limit for faster response
+            "max_tokens": 5000      # Limit for faster response
         }
     )
     
