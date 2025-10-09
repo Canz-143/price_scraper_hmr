@@ -11,7 +11,7 @@ model_id = "gemini-2.0-flash"
 search_tool = Tool(google_search=GoogleSearch())
 
 # Add semaphore for Gemini API rate limiting
-gemini_semaphore = asyncio.Semaphore(10)  # Limit to 10 concurrent Gemini requests
+gemini_semaphore = asyncio.Semaphore(10)  # Limit to 3 concurrent Gemini requests
 
 config = GenerateContentConfig(
     system_instruction=(
@@ -112,31 +112,13 @@ def extract_search_terms(product_description):
     lines = [line.strip('-*• ').strip() for line in block.splitlines() if line.strip()]
     return lines
 
-async def generate_search_variations(base_term):
-    """Generate multiple search query variations"""
-    variations = [
-        base_term,
-        f"{base_term} buy online",
-        f"{base_term} price Philippines",
-        f"{base_term} shop",
-        f"{base_term} store"
-    ]
-    return variations
-
 async def find_shopping_links_async(product_description: str):
-    """Async version with proper rate limiting and search variations"""
+    """Async version with proper rate limiting"""
     search_terms = extract_search_terms(product_description)
     if not search_terms:
         search_terms = [product_description]
-    
-    # Generate variations for the top 2 search terms
-    all_search_queries = []
-    for term in search_terms[:2]:
-        variations = await generate_search_variations(term)
-        all_search_queries.extend(variations)
-    
-    # Limit total queries to prevent excessive API calls
-    all_search_queries = all_search_queries[:8]
+    # Limit to top 3 search terms
+    search_terms = search_terms[:3]
 
     all_links = set()
     
@@ -185,14 +167,13 @@ Output format: URL
             return term_links
     
     # Process all search terms concurrently but with rate limiting
-    results = await asyncio.gather(*[process_search_term(term) for term in all_search_queries])
+    results = await asyncio.gather(*[process_search_term(term) for term in search_terms])
     
     # Combine all results
     for term_links in results:
         all_links.update(term_links)
     
-    # Return up to 10 unique links
-    return list(all_links)[:10]
+    return list(all_links)
 
 def find_shopping_links(product_description: str):
     """Synchronous wrapper - consider migrating to async version"""
