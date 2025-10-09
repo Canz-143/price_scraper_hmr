@@ -497,7 +497,7 @@ async def call_crawl4ai_extractor(links, request_id=None):
         ),
         extra_args={
             "temperature": 0,
-            "max_tokens": 10000
+            "max_tokens": 15000
         }
     )
     
