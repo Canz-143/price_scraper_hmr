@@ -212,53 +212,27 @@ async def call_crawl4ai_extractor(links, request_id=None):
             # Price - try multiple common selectors
             {
                 "name": "price_raw",
-                "selector": """
-                    [itemprop='price'],
-                    [data-price],
-                    [class*='price' i]:not([class*='original' i]):not([class*='was' i]):not([class*='strike' i]),
-                    [id*='price' i],
-                    .sale-price,
-                    .current-price,
-                    .product-price,
-                    #product-price,
-                    .price-now,
-                    meta[property='og:price:amount']
-                """,
+                "selector": "[itemprop='price'], [data-price], [class*='price']:not([class*='original']):not([class*='was']):not([class*='strike']), [id*='price'], .sale-price, .current-price, .product-price, #product-price, .price-now, meta[property='og:price:amount']",
                 "type": "text",
-                "attribute": "content"  # For meta tags
+                "attribute": "content"
             },
             # Currency code
             {
                 "name": "currency_code",
-                "selector": """
-                    [itemprop='priceCurrency'],
-                    [data-currency],
-                    meta[property='og:price:currency']
-                """,
+                "selector": "[itemprop='priceCurrency'], [data-currency], meta[property='og:price:currency']",
                 "type": "text",
                 "attribute": "content"
             },
             # Product name/title
             {
                 "name": "product_name",
-                "selector": """
-                    [itemprop='name'],
-                    h1.product-title,
-                    h1[class*='product' i],
-                    .product-name,
-                    #product-name
-                """,
+                "selector": "[itemprop='name'], h1.product-title, h1[class*='product'], .product-name, #product-name",
                 "type": "text"
             },
             # Website/brand name
             {
                 "name": "website_name",
-                "selector": """
-                    [itemprop='brand'],
-                    meta[property='og:site_name'],
-                    .site-logo img,
-                    header img[alt]
-                """,
+                "selector": "[itemprop='brand'], meta[property='og:site_name'], .site-logo img, header img[alt]",
                 "type": "text",
                 "attribute": "alt"
             }
