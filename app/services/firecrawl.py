@@ -210,7 +210,7 @@ async def call_crawl4ai_extractor(links, request_id=None):
     # OPTIMIZATION 1: Use faster Gemini model with optimized settings
     extraction_strategy = LLMExtractionStrategy(
         llm_config=LLMConfig(
-            provider="gemini/gemini-2.5-pro",  # Faster than 2.5-flash
+            provider="gemini/gemini-2.0-flash",  # Faster than 2.5-flash
             api_token=api_token
         ),
         schema=ProductPrice.model_json_schema(),
@@ -264,7 +264,7 @@ async def call_crawl4ai_extractor(links, request_id=None):
     run_config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=extraction_strategy,
-        wait_until="load",  # 40% faster than networkidle
+        wait_until="networkidle",  # 40% faster than networkidle
         page_timeout=30000,              # 30s timeout
         word_count_threshold=10,         # Skip pages with little content
         stream=True,                     # Process as results arrive
