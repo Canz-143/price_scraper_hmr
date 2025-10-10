@@ -15,7 +15,6 @@ from crawl4ai.extraction_strategy import LLMExtractionStrategy
 from pydantic import BaseModel, Field
 
 from app.config import GOOGLE_API_KEY
-from app.config import OPENAI_API_KEY
 
 
 
@@ -212,7 +211,7 @@ async def call_crawl4ai_extractor(links, request_id=None):
     # OPTIMIZATION 1: Use faster Gemini model with optimized settings
     extraction_strategy = LLMExtractionStrategy(
         llm_config=LLMConfig(
-            provider="openai/gpt-4o-mini",  # Faster than 2.5-flash
+            provider="gemini/gemini-2.0-flash",  # Faster than 2.5-flash
             api_token=api_token
         ),
         schema=ProductPrice.model_json_schema(),
