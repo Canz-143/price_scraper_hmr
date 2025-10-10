@@ -7,7 +7,7 @@ from google.genai.types import GenerateContentConfig
 from app.config import GOOGLE_API_KEY
 
 client = genai.Client()
-model_id = "gemini-2.5-flash-lite"
+model_id = "gemini-2.0-flash"
 search_tool = Tool(google_search=GoogleSearch())
 
 # Add semaphore for Gemini API rate limiting
