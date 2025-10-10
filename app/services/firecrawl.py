@@ -216,7 +216,7 @@ Return ONLY a valid JSON object in this exact format:
 If no price found, return all fields as empty strings.
 
 HTML to analyze:
-{html[:50000]}"""  # Limit HTML to ~50k chars to stay within token limits
+{html[:100000]}"""  # Limit HTML to ~50k chars to stay within token limits
     
     try:
         # Generate response
