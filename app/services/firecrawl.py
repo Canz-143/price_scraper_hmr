@@ -15,6 +15,8 @@ from crawl4ai.extraction_strategy import LLMExtractionStrategy
 from pydantic import BaseModel, Field
 
 from app.config import GOOGLE_API_KEY
+from app.config import OPENAI_API_KEY
+
 
 
 class ProductPrice(BaseModel):
