@@ -161,14 +161,14 @@ async def extract_price_with_gemini(html: str, url: str, model) -> dict:
     
     Args:
         html: Raw HTML content
-        url: Product page URL
+        url: Product page URL (used as fallback only)
         model: Configured Gemini model
     
     Returns:
         dict: Extracted price data or None if extraction fails
     """
     
-    prompt = f"""You are analyzing RAW HTML to extract precise product pricing information for this URL: {url}
+    prompt = f"""You are analyzing RAW HTML to extract precise product pricing information.
 
 CRITICAL: You're receiving the COMPLETE HTML source code. Look for price information in:
 - HTML elements with classes/ids containing: 'price', 'cost', 'amount', 'value'
@@ -185,9 +185,20 @@ EXTRACTION RULES:
    - Keep ONLY the decimal point
 3. currency_code: 3-letter ISO code (USD, PHP, EUR, GBP, etc.)
 4. website_name: E-commerce site name (Amazon, eBay, Lazada, etc.)
-5. product_page_url: {url}
+5. product_page_url: Extract the canonical product URL from the HTML itself
+   - Check <link rel="canonical"> tag
+   - Check <meta property="og:url"> tag
+   - Check window.location or JavaScript variables
+   - If not found, use the current page URL as fallback
 
-SEARCH PRIORITY:
+SEARCH PRIORITY FOR PRODUCT URL:
+1. <link rel="canonical" href="..."> - most reliable
+2. <meta property="og:url" content="..."> - Open Graph URL
+3. <meta property="product:url" content="..."> - Product-specific meta tag
+4. JSON-LD structured data with @type "Product" and "url" field
+5. If none found, use: {url}
+
+SEARCH PRIORITY FOR PRICE:
 1. Check structured data (JSON-LD, Schema.org, Open Graph)
 2. Check common price element patterns
 3. Look for CURRENT/SALE price (ignore crossed-out prices)
@@ -199,7 +210,7 @@ Return ONLY a valid JSON object in this exact format:
     "price": "numeric value only",
     "currency_code": "ISO code",
     "website_name": "site name",
-    "product_page_url": "{url}"
+    "product_page_url": "canonical URL from HTML"
 }}
 
 If no price found, return all fields as empty strings.
