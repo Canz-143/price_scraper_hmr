@@ -292,7 +292,7 @@ async def call_crawl4ai_extractor(links, request_id=None):
     
     # Configure Gemini
     genai.configure(api_key=GOOGLE_API_KEY)
-    model = genai.GenerativeModel('gemini-2.0-flash-exp')
+    model = genai.GenerativeModel('gemini-2.0-flash')
     
     # Browser config for speed
     browser_config = BrowserConfig(
