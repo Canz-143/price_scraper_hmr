@@ -155,142 +155,117 @@ def is_likely_product_page(url):
     return False
 
 
-async def extract_price_with_gemini(html: str, url: str, model, verbose=True) -> dict:
+async def extract_price_with_gemini(html: str, url: str, model) -> dict:
     """
-    Extract price directly using Gemini API with improved error handling.
+    Extract price directly using Gemini API (no Crawl4AI extraction layer).
     
     Args:
         html: Raw HTML content
         url: Product page URL (used as fallback only)
         model: Configured Gemini model
-        verbose: Print debug information
     
     Returns:
         dict: Extracted price data or None if extraction fails
     """
     
-    # Simple, focused prompt that works better
-    prompt = f"""Extract product pricing information from this HTML page.
+    prompt = f"""You are analyzing RAW HTML to extract precise product pricing information.
 
-Find and return ONLY this information in JSON format:
-1. combined_price: The visible price with currency symbol (e.g., "$1,299.99" or "₱2,500")
-2. price: Just the number without any symbols (e.g., "1299.99" or "2500")
-3. currency_code: Three-letter code (USD, PHP, EUR, GBP, etc.)
-4. website_name: Store name (Amazon, eBay, Lazada, etc.)
-5. product_page_url: Find canonical URL from these sources in order:
-   - <link rel="canonical" href="...">
-   - <meta property="og:url" content="...">
-   - If not found use: {url}
+CRITICAL: You're receiving the COMPLETE HTML source code. Look for price information in:
+- HTML elements with classes/ids containing: 'price', 'cost', 'amount', 'value'
+- Meta tags: <meta property='og:price:amount'>, <meta itemprop='price'>
+- Schema.org markup: <span itemprop='price'>, JSON-LD scripts
+- Data attributes: data-price, data-amount, data-cost
+- JavaScript variables: window.price, dataLayer, product objects
 
-Look for price in:
-- Elements with "price" in class/id
-- Meta tags: og:price:amount, product:price
-- JSON-LD structured data
-- Data attributes: data-price
+EXTRACTION RULES:
+1. combined_price: Extract the EXACT price text as displayed (e.g., '$2,499.99', '₱2,500.00')
+2. price: Extract ONLY the numeric value without symbols or separators (e.g., '2499.99', '2500.00')
+   - Remove ALL currency symbols: $, €, ₱, £, ¥, Rs
+   - Remove thousand separators (commas, spaces, periods used as thousands)
+   - Keep ONLY the decimal point
+3. currency_code: 3-letter ISO code (USD, PHP, EUR, GBP, etc.)
+4. website_name: E-commerce site name (Amazon, eBay, Lazada, etc.)
+5. product_page_url: Extract the canonical product URL from the HTML itself
+   - Check <link rel="canonical"> tag
+   - Check <meta property="og:url"> tag
+   - Check window.location or JavaScript variables
+   - If not found, use the current page URL as fallback
 
-IMPORTANT: 
-- Extract the CURRENT/SALE price (ignore crossed-out or "was" prices)
-- For "price" field, remove ALL symbols and separators except decimal point
-- Return valid JSON only, no markdown formatting
+SEARCH PRIORITY FOR PRODUCT URL:
+1. <link rel="canonical" href="..."> - most reliable
+2. <meta property="og:url" content="..."> - Open Graph URL
+3. <meta property="product:url" content="..."> - Product-specific meta tag
+4. JSON-LD structured data with @type "Product" and "url" field
+5. If none found, use: {url}
 
-Example output:
+SEARCH PRIORITY FOR PRICE:
+1. Check structured data (JSON-LD, Schema.org, Open Graph)
+2. Check common price element patterns
+3. Look for CURRENT/SALE price (ignore crossed-out prices)
+4. Choose price near 'Add to Cart' button if multiple exist
+
+Return ONLY a valid JSON object in this exact format:
 {{
-  "combined_price": "$1,299.99",
-  "price": "1299.99",
-  "currency_code": "USD",
-  "website_name": "Amazon",
-  "product_page_url": "https://amazon.com/product/12345"
+    "combined_price": "exact price string",
+    "price": "numeric value only",
+    "currency_code": "ISO code",
+    "website_name": "site name",
+    "product_page_url": "canonical URL from HTML"
 }}
 
-HTML (first 100000 characters):
-{html[:100000]}"""
+If no price found, return all fields as empty strings.
+
+HTML to analyze:
+{html[:1000000]}"""  # Limit HTML to ~50k chars to stay within token limits
     
     try:
-        if verbose:
-            print(f"\n🔍 Extracting price for: {url}")
-            print(f"   HTML length: {len(html)} chars")
-        
-        # Generate response with safer settings
+        # Generate response
         response = model.generate_content(
             prompt,
             generation_config={
                 "temperature": 0,
-                "top_p": 0.95,
-                "max_output_tokens": 1000,
-                "response_mime_type": "application/json"  # Force JSON output
-            },
-            safety_settings={
-                'HARASSMENT': 'block_none',
-                'HATE_SPEECH': 'block_none', 
-                'SEXUALLY_EXPLICIT': 'block_none',
-                'DANGEROUS_CONTENT': 'block_none'
+                "max_output_tokens": 500,  # We only need a small JSON response
             }
         )
         
-        # Get the response text
+        # Extract JSON from response
         text = response.text.strip()
         
-        if verbose:
-            print(f"   Raw response length: {len(text)} chars")
-            print(f"   Response preview: {text[:200]}")
+        # Remove markdown code blocks if present
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
         
-        # Try to parse JSON
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            # Try to extract JSON from markdown code blocks
-            if "```json" in text:
-                json_match = re.search(r'```json\s*(\{.*?\})\s*```', text, re.DOTALL)
-                if json_match:
-                    data = json.loads(json_match.group(1))
-                else:
-                    if verbose:
-                        print(f"   ❌ Failed to extract JSON from markdown")
-                    return None
-            elif "```" in text:
-                json_match = re.search(r'```\s*(\{.*?\})\s*```', text, re.DOTALL)
-                if json_match:
-                    data = json.loads(json_match.group(1))
-                else:
-                    if verbose:
-                        print(f"   ❌ Failed to extract JSON from code block")
-                    return None
-            else:
-                # Try to find JSON object in the text
-                json_match = re.search(r'\{.*\}', text, re.DOTALL)
-                if json_match:
-                    data = json.loads(json_match.group(0))
-                else:
-                    if verbose:
-                        print(f"   ❌ No JSON found in response")
-                    return None
+        # Parse JSON
+        data = json.loads(text.strip())
         
-        # Validate the response has required fields
+        # Validate it has the required fields
         if isinstance(data, dict) and "price" in data:
-            if verbose:
-                print(f"   ✅ Extracted: {data.get('combined_price', 'N/A')}")
             return data
-        else:
-            if verbose:
-                print(f"   ⚠️  Response missing 'price' field")
-            return None
+        
+        return None
         
     except Exception as e:
-        if verbose:
-            print(f"   ❌ Extraction error: {type(e).__name__}: {str(e)}")
+        print(f"Gemini extraction error for {url}: {e}")
         return None
 
 
-async def call_crawl4ai_extractor(links, request_id=None, verbose=True):
+async def call_crawl4ai_extractor(links, request_id=None):
     """
-    SIMPLIFIED APPROACH with better debugging:
+    SIMPLIFIED APPROACH: 
     1. Use Crawl4AI ONLY for fetching raw HTML (fast)
     2. Use Gemini API directly for extraction (no Crawl4AI extraction layer)
+    
+    Benefits:
+    - Faster (no double processing)
+    - More control over prompts
+    - Easier to debug
+    - Lower overhead
     
     Args:
         links (list): URLs to crawl
         request_id: Optional request identifier
-        verbose: Print debug information
     
     Returns:
         dict: Response with success status and ecommerce_links array
@@ -299,25 +274,14 @@ async def call_crawl4ai_extractor(links, request_id=None, verbose=True):
     limited_links = links[:10]
     filtered_links = []
     
-    if verbose:
-        print(f"\n📋 Processing {len(limited_links)} links...")
-    
     for url in limited_links:
         if not is_valid_url(url):
-            if verbose:
-                print(f"   ❌ Invalid URL: {url}")
             continue
         if is_search_or_collection_page(url):
-            if verbose:
-                print(f"   ⏭️  Skipping collection page: {url}")
             continue
         if not is_likely_product_page(url):
-            if verbose:
-                print(f"   ⏭️  Not a product page: {url}")
             continue
         filtered_links.append(url)
-        if verbose:
-            print(f"   ✅ Valid product URL: {url}")
     
     if not filtered_links:
         return {
@@ -325,9 +289,6 @@ async def call_crawl4ai_extractor(links, request_id=None, verbose=True):
             "error": "No valid product URLs after filtering.",
             "data": {"ecommerce_links": []}
         }
-    
-    if verbose:
-        print(f"\n🎯 {len(filtered_links)} valid product URLs to crawl\n")
     
     # Configure Gemini
     genai.configure(api_key=GOOGLE_API_KEY)
@@ -340,7 +301,7 @@ async def call_crawl4ai_extractor(links, request_id=None, verbose=True):
         accept_downloads=False,
     )
     
-    # Simple run config - JUST GET THE HTML
+    # Simple run config - JUST GET THE HTML, NO EXTRACTION
     run_config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         wait_until="domcontentloaded",
@@ -348,23 +309,20 @@ async def call_crawl4ai_extractor(links, request_id=None, verbose=True):
         word_count_threshold=10,
         stream=True,
         semaphore_count=3
+        # NO extraction_strategy here!
     )
     
     ecommerce_links = []
     
-    # Crawl pages and extract prices
-    async with AsyncWebCrawler(config=browser_config, verbose=False) as crawler:
+    # Step 1: Crawl pages to get raw HTML (Crawl4AI's job)
+    async with AsyncWebCrawler(config=browser_config, verbose=True) as crawler:
         async for result in await crawler.arun_many(urls=filtered_links, config=run_config):
             if result.success and result.html:
-                if verbose:
-                    print(f"✅ Crawled: {result.url}")
-                
-                # Extract price using Gemini
+                # Step 2: Extract price using Gemini directly (no Crawl4AI layer)
                 extracted_data = await extract_price_with_gemini(
                     html=result.html,
                     url=result.url,
-                    model=model,
-                    verbose=verbose
+                    model=model
                 )
                 
                 if extracted_data and isinstance(extracted_data, dict):
@@ -376,17 +334,6 @@ async def call_crawl4ai_extractor(links, request_id=None, verbose=True):
                         "currency_code": extracted_data.get("currency_code", ""),
                         "price_combined": extracted_data.get("combined_price", "")
                     })
-                else:
-                    if verbose:
-                        print(f"   ⚠️  No price extracted for {result.url}\n")
-            else:
-                if verbose:
-                    print(f"❌ Failed to crawl: {result.url}")
-                    if result.error_message:
-                        print(f"   Error: {result.error_message}\n")
-    
-    if verbose:
-        print(f"\n✨ Extraction complete: {len(ecommerce_links)}/{len(filtered_links)} products with prices\n")
     
     return {
         "success": True,
