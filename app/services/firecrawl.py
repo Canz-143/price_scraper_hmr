@@ -216,7 +216,7 @@ Return ONLY a valid JSON object in this exact format:
 If no price found, return all fields as empty strings.
 
 HTML to analyze:
-{html[:500000]}"""  # Limit HTML to ~50k chars to stay within token limits
+{html[:50000]}"""  # Limit HTML to ~50k chars to stay within token limits
     
     try:
         # Generate response
@@ -292,7 +292,7 @@ async def call_crawl4ai_extractor(links, request_id=None):
     
     # Configure Gemini
     genai.configure(api_key=GOOGLE_API_KEY)
-    model = genai.GenerativeModel('gemini-2.0-flash')
+    model = genai.GenerativeModel('gemini-2.0-flash-exp')
     
     # Browser config for speed
     browser_config = BrowserConfig(
