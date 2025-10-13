@@ -275,7 +275,7 @@ async def call_crawl4ai_extractor(links, request_id=None):
     # Optimized extraction strategy with filtered HTML
     extraction_strategy = LLMExtractionStrategy(
         llm_config=LLMConfig(
-            provider="gemini/gemini-2.0-flash-exp",  # Fastest experimental model
+            provider="gemini/gemini-2.5-flash",  # Fastest experimental model
             api_token=api_token
         ),
         schema=ProductPrice.model_json_schema(),
